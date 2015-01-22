@@ -12,18 +12,19 @@ import re
 import sys
 import yaml
 
-from docopt import docopt    # http://docopt.org/
-import moment                # https://pypi.python.org/pypi/moment
+from docopt import docopt  # http://docopt.org/
+import moment  # https://pypi.python.org/pypi/moment
 from redmine import Redmine  # https://pypi.python.org/pypi/python-redmine
 from redmine.exceptions import (
-        AuthError,
-        ResourceNoFieldsProvidedError,
-        ResourceNotFoundError,
-        ServerError
-    )
+    AuthError,
+    ResourceNoFieldsProvidedError,
+    ResourceNotFoundError,
+    ServerError
+)
 
 
 sys.path.append('.')
+
 from lib import common
 from lib.common import print_
 
@@ -90,11 +91,13 @@ def getTimeEntries(date, config):
     activities = []
     total_duration = 0
     for time_entry in time_entries:
+        print time_entry
         label = time_entry[0]
         if not time_entry[2]:
             print(u'\n** Warning: ignoring "{}": Not completed yet\n'.format(label))
             continue
-        duration = (moment.date(time_entry[2], DB_TIMESTAMP_FORMAT) - moment.date(time_entry[1], DB_TIMESTAMP_FORMAT)).seconds / 3600.
+        duration = (moment.date(time_entry[2], DB_TIMESTAMP_FORMAT) - moment.date(time_entry[1],
+                                                                                  DB_TIMESTAMP_FORMAT)).seconds / 3600.
         assert duration > 0, "Duration for entry {} is not >0: {}".format(label, duration)
         total_duration += duration
         duration = round(duration, 1)
@@ -106,11 +109,21 @@ def getTimeEntries(date, config):
         else:
             print u'\n** Warning: ignoring entry "{}" : not able to find issue ID\n'.format(label)
             continue
+
+        finish = False
+
         print u"* [{duration}h #{id}]: {label}".format(
             duration=round(duration, 1), id=issue_id, label=label
         )
         if comment is not None:
             print u"  {}".format(comment)
+            # Try to find Redmine issue IDs from label using regexp defined in config file
+            match_finish = re.match(".*@done", comment)
+            if match_finish:
+                finish = True
+            else:
+                print u'\n** Warning: not finish yet\n'
+
         # Try to find activity_id
         category_name = time_entry[4]
         if category_name is not None and categories_association is not None:
@@ -135,7 +148,8 @@ def getTimeEntries(date, config):
             'issue_id': issue_id,
             'duration': duration,
             'comment': comment,
-            'activity_id': activity_id
+            'activity_id': activity_id,
+            'finish': finish
         })
     if total_duration > 0:
         print "\n\nTotal : {}h".format(round(total_duration, 1))
@@ -144,6 +158,7 @@ def getTimeEntries(date, config):
 
 def syncToRedmine(time_entries, date, redmine):
     '''Push all given time_entries to Redmine'''
+
     def issue_exists(id, redmine):
         assert id
         issue_exists = True
@@ -158,22 +173,31 @@ def syncToRedmine(time_entries, date, redmine):
         for time_entry_infos in time_entries:
             print_('.')
             try:
-                issue_id=time_entry_infos['issue_id']
+                issue_id = time_entry_infos['issue_id']
                 # Send this activity to Redmine
+                # print date.date.strftime('%Y-%m-%d')
+
                 time_entry = redmine.time_entry.create(
-                    spent_on=date.date,  # converts Moment date to Datetime
+                    spent_on=date.date.strftime('%Y-%m-%d'),  # converts Moment date to Datetime
                     issue_id=issue_id,
                     hours=time_entry_infos['duration'],
                     activity_id=time_entry_infos['activity_id'],
                     comments=time_entry_infos['comment']
                 )
+                if time_entry_infos['finish']:
+                    redmine.issue.update(
+                        issue_id,
+                        assigned_to_id=21,
+                        status_id=7,
+                        done_ratio=100
+                    )
             except ServerError:
                 # Error 500
                 # Check that issue id exists (may be a cause of 500 error on some Redmine versions)
                 print
                 if not issue_exists(issue_id, redmine):
-                    print "** ERROR ** Internal server error received from Redmine. "\
-                        "This is probably because issue id {} doesn't exists ?".format(issue_id)
+                    print "** ERROR ** Internal server error received from Redmine. " \
+                          "This is probably because issue id {} doesn't exists ?".format(issue_id)
                 else:
                     print "** ERROR ** Internal server error received from Redmine !"
                 print "\nLast time entry was:\n{}".format(pformat(time_entry_infos))
